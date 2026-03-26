@@ -1,0 +1,88 @@
+{
+  "name": "file-signature-analyzer",
+  "version": "1.0.0",
+  "description": "File Signature Analysis and Recovering Deleted Files",
+  "main": "main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "electron:dev": "electron . --dev",
+    "electron:build": "vite build && electron-builder",
+    "start": "vite build && electron .",
+    "package:win": "npm run build && electron-builder --win",
+    "package:linux": "npm run build && electron-builder --linux",
+    "package:all": "npm run build && electron-builder --win --linux"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.0.0",
+    "axios": "^1.6.0",
+    "form-data": "^4.0.0",
+    "lucide-react": "^0.292.0",
+    "plotly.js-dist-min": "^2.26.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.0",
+    "autoprefixer": "^10.4.16",
+    "electron": "^27.0.0",
+    "electron-builder": "^24.9.1",
+    "postcss": "^8.4.31",
+    "tailwindcss": "^3.3.5",
+    "vite": "^5.0.0"
+  },
+  "build": {
+    "appId": "com.filesignature.analyzer",
+    "productName": "File Signature Analyzer",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "dist/**/*",
+      "main.js",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../../saved_models",
+        "to": "saved_models",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../api",
+        "to": "api",
+        "filter": [
+          "**/*.py"
+        ]
+      },
+      {
+        "from": "../../outputs",
+        "to": "outputs",
+        "filter": [
+          "*.json",
+          "*.png"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "assets/icon.png",
+      "category": "Utility"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "assets/icon.png",
+      "installerHeaderIcon": "assets/icon.png",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "File Signature Analyzer"
+    }
+  }
+}
