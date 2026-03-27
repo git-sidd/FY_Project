@@ -79,18 +79,22 @@ def save_training_curve(history, filename):
     plt.close()
 
 def save_shap_summary(xgb_model, X, feature_names, filename):
-    # Select subset for shap so it doesn't take forever
-    X_sample = X[:min(500, len(X))]
-    explainer = shap.TreeExplainer(xgb_model)
-    shap_values = explainer.shap_values(X_sample)
-    
-    plt.figure(figsize=(10, 8))
-    # SHAP summary plot for multi-class generates a layered bar plot automatically.
-    # To save without display, we can use shap.summary_plot(..., show=False)
-    shap.summary_plot(shap_values, X_sample, feature_names=feature_names, show=False, plot_type="bar")
-    plt.tight_layout()
-    plt.savefig(filename)
-    plt.close()
+    try:
+        # Select subset for shap so it doesn't take forever
+        X_sample = X[:min(500, len(X))]
+        explainer = shap.TreeExplainer(xgb_model)
+        shap_values = explainer.shap_values(X_sample)
+        
+        plt.figure(figsize=(10, 8))
+        # SHAP summary plot for multi-class generates a layered bar plot automatically.
+        shap.summary_plot(shap_values, X_sample, feature_names=feature_names, show=False, plot_type="bar")
+        plt.tight_layout()
+        plt.savefig(filename)
+        plt.close()
+        print(f"    [OK] SHAP summary saved to {filename}")
+    except Exception as e:
+        print(f"    [!] Skipping SHAP summary: Interpretation library error ({e})")
+        plt.close()
 
 def main():
     os.makedirs('saved_models', exist_ok=True)

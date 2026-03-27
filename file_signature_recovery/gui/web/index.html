@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Signature Recovery & Analysis</title>
+    <meta name="description" content="AI-powered forensic file recovery, malware detection, and signature analysis system">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="app-header">
+        <div class="header-content">
+            <div class="logo">
+                <div class="logo-icon">🔬</div>
+                <div>
+                    <h1>File Signature Recovery</h1>
+                    <p class="tagline">AI-Powered Forensic Analysis & Recovery System</p>
+                </div>
+            </div>
+            <div class="header-status" id="systemStatus">
+                <span class="status-dot"></span>
+                <span>Checking...</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Navigation Tabs -->
+    <nav class="tab-nav">
+        <button class="tab-btn active" data-tab="analyze" onclick="switchTab('analyze')">
+            <span class="tab-icon">🔍</span> Analyze File
+        </button>
+        <button class="tab-btn" data-tab="recover" onclick="switchTab('recover')">
+            <span class="tab-icon">🔄</span> Recovery Scan
+        </button>
+        <button class="tab-btn" data-tab="results" onclick="switchTab('results')">
+            <span class="tab-icon">📊</span> Results
+        </button>
+    </nav>
+
+    <!-- Tab: Analyze Single File -->
+    <section id="tab-analyze" class="tab-content active">
+        <div class="card glass">
+            <h2>📁 Analyze Single File</h2>
+            <p class="card-desc">Drop a file here or click to browse. The AI will identify its true type and check for malware.</p>
+
+            <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+                <div class="drop-zone-content">
+                    <div class="drop-icon">📂</div>
+                    <p class="drop-text">Drag & Drop file here</p>
+                    <p class="drop-subtext">or click to browse</p>
+                </div>
+                <input type="file" id="fileInput" hidden>
+            </div>
+
+            <div id="analyzeLoading" class="loading-bar" style="display:none">
+                <div class="loading-bar-fill"></div>
+                <p>Analyzing file...</p>
+            </div>
+        </div>
+
+        <!-- Single File Results -->
+        <div id="analyzeResults" style="display:none">
+            <div class="results-grid">
+                <div class="result-card glass" id="resultType">
+                    <div class="result-label">Predicted File Type</div>
+                    <div class="result-value" id="resType">—</div>
+                    <div class="result-sub" id="resConfidence">Confidence: —</div>
+                </div>
+                <div class="result-card glass" id="resultMalware">
+                    <div class="result-label">Malware Risk</div>
+                    <div class="result-value" id="resMalware">—</div>
+                    <div class="result-sub" id="resMalScore">Score: —</div>
+                </div>
+                <div class="result-card glass" id="resultYara">
+                    <div class="result-label">YARA Scan</div>
+                    <div class="result-value" id="resYara">—</div>
+                    <div class="result-sub" id="resYaraDetail">—</div>
+                </div>
+                <div class="result-card glass">
+                    <div class="result-label">Analysis Time</div>
+                    <div class="result-value" id="resTime">—</div>
+                    <div class="result-sub" id="resSize">File size: —</div>
+                </div>
+            </div>
+
+            <!-- Byte Histogram -->
+            <div class="card glass" id="histogramCard" style="display:none">
+                <h3>📊 Byte Distribution</h3>
+                <canvas id="histogramCanvas" width="800" height="200"></canvas>
+            </div>
+        </div>
+    </section>
+
+    <!-- Tab: Recovery Scan -->
+    <section id="tab-recover" class="tab-content">
+        <div class="card glass">
+            <h2>🔄 Recovery Scan</h2>
+            <p class="card-desc">Enter a folder path to scan for deleted, corrupted, or disguised files. The AI will analyze each file, check for malware, and attempt recovery.</p>
+
+            <div class="input-group">
+                <input type="text" id="folderPath" placeholder="Enter folder path, e.g. C:\Users\Dell\Desktop\TestFiles" class="folder-input">
+                <button id="startRecoveryBtn" class="btn-primary" onclick="startRecovery()">
+                    <span class="btn-icon">🚀</span> Start Recovery
+                </button>
+            </div>
+
+            <div class="checkbox-group">
+                <label><input type="checkbox" id="recursiveCheck" checked> Scan subfolders recursively</label>
+            </div>
+        </div>
+
+        <!-- Recovery Progress -->
+        <div id="recoveryProgress" class="card glass" style="display:none">
+            <h3>⏳ Recovery Progress</h3>
+            <div class="progress-container">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                </div>
+                <div class="progress-text">
+                    <span id="progressText">0 / 0 files</span>
+                    <span id="progressPercent">0%</span>
+                </div>
+            </div>
+            <p class="progress-message" id="progressMessage">Initializing...</p>
+        </div>
+
+        <!-- Recovery Summary -->
+        <div id="recoverySummary" class="card glass" style="display:none">
+            <h3>✅ Recovery Complete</h3>
+            <div class="summary-grid">
+                <div class="summary-item recovered">
+                    <div class="summary-number" id="sumRecovered">0</div>
+                    <div class="summary-label">Recovered</div>
+                </div>
+                <div class="summary-item quarantined">
+                    <div class="summary-number" id="sumQuarantined">0</div>
+                    <div class="summary-label">Quarantined</div>
+                </div>
+                <div class="summary-item errors">
+                    <div class="summary-number" id="sumErrors">0</div>
+                    <div class="summary-label">Errors</div>
+                </div>
+                <div class="summary-item total">
+                    <div class="summary-number" id="sumTotal">0</div>
+                    <div class="summary-label">Total Scanned</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Tab: Results -->
+    <section id="tab-results" class="tab-content">
+        <div class="card glass">
+            <h2>📊 Recovery Results</h2>
+            <p class="card-desc">Detailed results from the last recovery scan.</p>
+
+            <div id="noResults" class="empty-state">
+                <div class="empty-icon">📭</div>
+                <p>No results yet. Run a Recovery Scan first.</p>
+            </div>
+
+            <div id="resultsTable" style="display:none">
+                <div class="table-controls">
+                    <input type="text" id="searchResults" placeholder="🔍 Search files..." class="search-input" oninput="filterResults()">
+                    <select id="filterAction" class="filter-select" onchange="filterResults()">
+                        <option value="all">All Files</option>
+                        <option value="recovered">✓ Recovered</option>
+                        <option value="quarantined">⚠ Quarantined</option>
+                        <option value="error">✗ Errors</option>
+                    </select>
+                </div>
+                <div class="results-list" id="resultsList"></div>
+            </div>
+        </div>
+    </section>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

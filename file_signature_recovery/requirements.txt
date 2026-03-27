@@ -1,4 +1,4 @@
-# ── File Signature Analysis & Recovery — Dependencies ──
+# ── File Signature Recovery & Analysis — Dependencies ──
 numpy>=1.24.0
 pandas>=2.0.0
 tensorflow>=2.13.0
@@ -7,7 +7,11 @@ shap>=0.43.0
 scikit-learn>=1.3.0
 matplotlib>=3.7.0
 seaborn>=0.12.0
-PyQt6>=6.5.0
-pyinstaller>=6.0.0
-reportlab>=4.0.0
 tqdm>=4.65.0
+# ── Recovery System ──
+yara-python>=4.3.0
+psutil>=5.9.0
+# ── Web API ──
+fastapi>=0.100.0
+uvicorn>=0.23.0
+python-multipart>=0.0.6
