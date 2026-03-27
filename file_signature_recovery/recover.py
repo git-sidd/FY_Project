@@ -7,6 +7,12 @@ recover.py — Full File Recovery Tool with Disk Scanning
   2. Recycle Bin scan    — Find recently deleted files in Windows Recycle Bin
   3. Raw Disk scan       — Scan physical disk sectors for permanently deleted files (Admin required)
 
+SECURITY MODEL:
+  ► is_malicious is determined STRICTLY by YARA rule matches.
+  ► AI malware_score is logged for reference but does NOT affect quarantine.
+  ► If YARA flags a file → QUARANTINE.
+  ► If YARA clears a file → RECOVER.
+
 Usage:
     python recover.py "C:\\Users\\Dell\\Desktop\\Test_folder"
     python recover.py "C:\\Users\\Dell\\Desktop\\Test_folder" --deep
@@ -55,7 +61,13 @@ def load_model():
 
 
 def classify_candidate(candidate: dict, model, label_decoder, yara_scanner) -> dict:
-    """Run AI classification and YARA scan on a file candidate."""
+    """
+    Run AI classification and YARA scan on a file candidate.
+
+    SECURITY: is_malicious is set ONLY by YARA results.
+    The AI malware_score is stored for reporting but does NOT
+    influence the quarantine decision.
+    """
     byte_array = candidate["byte_array"].astype(np.float32)
     prediction = model.predict_single(byte_array)
 
@@ -65,7 +77,7 @@ def classify_candidate(candidate: dict, model, label_decoder, yara_scanner) -> d
     malware_score = prediction["malware_score"]
     risk_level = prediction["risk_level"]
 
-    # YARA Scan
+    # ── STRICT YARA-ONLY malware decision ──
     is_malicious = False
     yara_threats = []
     if yara_scanner:
@@ -73,13 +85,12 @@ def classify_candidate(candidate: dict, model, label_decoder, yara_scanner) -> d
             with open(candidate["filepath"], "rb") as f:
                 file_data = f.read()
             yara_result = yara_scanner.scan_bytes(file_data, candidate.get("filename", ""))
-            is_malicious = yara_result["threat_detected"]
+            is_malicious = yara_result["threat_detected"]   # ONLY YARA decides
             yara_threats = yara_result["threats"]
         except Exception:
             pass
 
-    if malware_score >= 0.7:
-        is_malicious = True
+    # NOTE: malware_score >= 0.7 check REMOVED — YARA is the sole authority
 
     candidate.update({
         "predicted_type": pred_type,

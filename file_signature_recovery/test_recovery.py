@@ -7,11 +7,21 @@ Tests:
   2. Recycle Bin scan (finds f2 IF it's still in Recycle Bin)
   3. Raw disk scan (finds f2 even if Recycle Bin was emptied)
   4. Full combined report
+
+SECURITY MODEL:
+  ► is_malicious is determined STRICTLY by YARA rule matches.
+  ► AI malware_score is logged for reference but does NOT affect quarantine.
+  ► If YARA flags a file → QUARANTINE.
+  ► If YARA clears a file → RECOVER.
 """
 
 import os
 import sys
 import ctypes
+import io
+
+# Force UTF-8 output on Windows
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 # Add project root
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -40,9 +50,11 @@ def main():
     is_admin = check_admin()
 
     print("=" * 65)
-    print("  FILE RECOVERY SYSTEM — COMPLETE TEST")
+    print("  FILE RECOVERY SYSTEM - COMPLETE TEST")
+    print("  ── STRICT YARA-ONLY MALWARE SCANNING ──")
     print("=" * 65)
-    print(f"  Admin mode: {'YES ✓ (raw disk scanning enabled)' if is_admin else 'NO (Recycle Bin only)'}")
+    print(f"  Admin mode: {'YES (raw disk scanning enabled)' if is_admin else 'NO (Recycle Bin only)'}")
+    print(f"  Security  : YARA rules ONLY (AI score logged but NOT used for quarantine)")
     print()
 
     # ── Load Model ──
@@ -88,14 +100,15 @@ def main():
         pred_idx = pred["predicted_class_idx"]
         pred_type = label_decoder[pred_idx] if label_decoder is not None and pred_idx < len(label_decoder) else f"Type_{pred_idx}"
 
-        # YARA scan
-        is_malicious = pred["malware_score"] >= 0.7
+        # ── STRICT YARA-ONLY malware decision ──
+        # AI malware_score is INFORMATIONAL only — NOT used for quarantine
+        is_malicious = False
         yara_threats = []
         try:
             with open(candidate["filepath"], "rb") as f:
                 file_data = f.read()
             yr = yara.scan_bytes(file_data, candidate.get("filename", ""))
-            is_malicious = is_malicious or yr["threat_detected"]
+            is_malicious = yr["threat_detected"]   # ONLY YARA decides
             yara_threats = yr["threats"]
         except Exception:
             pass
@@ -114,12 +127,15 @@ def main():
 
         print(f"    {icon} [{src}] {candidate['filename']}")
         print(f"       Type: {pred_type} ({pred['confidence']*100:.1f}%) | Risk: {pred['risk_level']} | → {action.upper()}")
+        print(f"       AI malware_score: {pred['malware_score']:.3f} (info only — NOT used for quarantine)")
+        if yara_threats:
+            for t in yara_threats:
+                print(f"       ⚠ YARA MATCH: {t['rule']} → QUARANTINED")
+        else:
+            print(f"       ✓ YARA: CLEAN — no malware patterns detected")
         if recon.get("repairs"):
             for r in recon["repairs"]:
                 print(f"       Repair: {r}")
-        if yara_threats:
-            for t in yara_threats:
-                print(f"       ⚠ YARA: {t['rule']}")
 
         candidate.update({
             "predicted_type": pred_type,
@@ -140,9 +156,9 @@ def main():
     test_folder = os.path.join(os.path.expanduser("~"), "Desktop", "Test_folder")
 
     if os.path.exists(test_folder):
-        print(f"[2] FOLDER SCAN — {test_folder}")
-        print("─" * 65)
-        print("    (Note: deleted f2 will NOT appear here — that's expected)\n")
+        print(f"[2] FOLDER SCAN - {test_folder}")
+        print("-" * 65)
+        print("    (Note: deleted f2 will NOT appear here - that's expected)\n")
 
         scanner = FolderScanner(test_folder)
         total = scanner.count_files()
@@ -163,7 +179,7 @@ def main():
     # TEST 2: Recycle Bin Scan
     # ══════════════════════════════════════════════════════
     print("[3] RECYCLE BIN SCAN")
-    print("─" * 65)
+    print("-" * 65)
     print("    Scanning all Recycle Bin locations...")
 
     rb_scanner = RecycleBinScanner(
@@ -188,22 +204,21 @@ def main():
     # TEST 3: Raw Disk Scan (Admin required)
     # ══════════════════════════════════════════════════════
     print("[4] RAW DISK SCAN (finds permanently deleted files)")
-    print("─" * 65)
+    print("-" * 65)
 
     if not is_admin:
         print("    ⚠ NOT RUNNING AS ADMINISTRATOR")
         print("    To recover permanently deleted files (Recycle Bin emptied):")
-        print("    ┌─────────────────────────────────────────────────────────┐")
-        print("    │ 1. Close this terminal                                  │")
-        print("    │ 2. Search 'PowerShell' in Start Menu                    │")
-        print("    │ 3. Right-click → 'Run as Administrator'                 │")
-        print("    │ 4. cd c:\\Users\\Dell\\Desktop\\FY_Project\\file_signature_recovery │")
-        print("    │ 5. python test_recovery.py                               │")
-        print("    └─────────────────────────────────────────────────────────┘")
+        print("    Steps to enable disk scanning:")
+        print("    1. Close this terminal")
+        print("    2. Search 'PowerShell' in Start Menu")
+        print("    3. Right-click -> 'Run as Administrator'")
+        print("    4. cd c:\\Users\\Dell\\Desktop\\FY_Project\\file_signature_recovery")
+        print("    5. python test_recovery.py")
     else:
         print("    ✓ Running as Administrator — raw disk access enabled")
-        print("    Scanning C: drive sectors (up to 50,000 sectors ≈ 25MB)")
-        print("    This may take 1-2 minutes...")
+        print("    Scanning C: drive sectors (up to 2,000,000 sectors ≈ 1GB)")
+        print("    This may take several minutes...")
         print()
 
         disk_scanner = DiskScanner(
@@ -212,11 +227,11 @@ def main():
         )
 
         found = disk_scanner.scan_for_deleted_files(
-            max_sectors=50000,
+            max_sectors=2000000,
             start_sector=0,
             progress_callback=lambda cur, total, found: (
                 print(f"\r    Progress: {cur:,}/{total:,} sectors | Found: {found}", end="", flush=True)
-                if cur % 5000 == 0 else None
+                if cur % 10000 == 0 else None
             ),
         )
 
@@ -237,7 +252,7 @@ def main():
     # GENERATE REPORT
     # ══════════════════════════════════════════════════════
     print("[5] GENERATING FORENSIC REPORT")
-    print("─" * 65)
+    print("-" * 65)
 
     scan_summary = {
         "test_folder": test_folder,
@@ -258,9 +273,9 @@ def main():
     print("  TEST RESULTS SUMMARY")
     print("=" * 65)
     print(f"  Total files processed : {totals['total_files_scanned']}")
-    print(f"  ✓ Recovered           : {totals['recovered']}")
-    print(f"  ⚠ Quarantined         : {totals['quarantined']}")
-    print(f"  ✗ Errors              : {totals['errors']}")
+    print(f"  [OK] Recovered        : {totals['recovered']}")
+    print(f"  [!!] Quarantined      : {totals['quarantined']}")
+    print(f"  [X]  Errors           : {totals['errors']}")
     print()
     print(f"  Recovered files saved to : recovered_files/")
     print(f"  JSON Report              : {json_path}")
@@ -269,10 +284,19 @@ def main():
 
     recovered_list = [r for r in all_results if r.get("action") == "recovered"]
     if recovered_list:
-        print("  All Recovered Files:")
+        print("  RECOVERED FILES LIST:")
         for r in recovered_list:
             src = r.get("source", "folder")
-            print(f"    → [{src}] {r['filename']} → {r['predicted_type']} ({r.get('confidence', 0)*100:.0f}%)")
+            tag = "[DISK CARVED]" if src == "disk_scan" else "[RECYCLE BIN]" if src == "recycle_bin" else "[FOLDER]"
+            print(f"    -> {tag} {r['filename']} -> Predicted as {r['predicted_type']} ({r.get('confidence', 0)*100:.0f}%)")
+            if r['filename'] == "f2":
+                print("       [!] THIS IS YOUR DELETED f2 FILE - SUCCESSFULLY RECOVERED!")
+    
+    quarantined_list = [r for r in all_results if r.get("action") == "quarantined"]
+    if quarantined_list:
+        print("\n  QUARANTINED FILES (MALICIOUS):")
+        for r in quarantined_list:
+            print(f"    !! {r['filename']} (YARA detected: {', '.join(t['rule'] for t in r.get('yara_threats', []))})")
     print("=" * 65)
 
 

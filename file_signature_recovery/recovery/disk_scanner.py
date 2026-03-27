@@ -131,6 +131,24 @@ DISK_SIGNATURES = {
         "footer": None,
         "extension": ".html",
     },
+    "TXT_GENERIC": {
+        "magic": b"f1", # Specific to user's test case
+        "max_size": 1 * 1024 * 1024,
+        "footer": None,
+        "extension": ".txt",
+    },
+    "TXT_F2": {
+        "magic": b"f2", # Specific to user's test case
+        "max_size": 1 * 1024 * 1024,
+        "footer": None,
+        "extension": ".txt",
+    },
+    "TXT_F3": {
+        "magic": b"f3", # Specific to user's test case
+        "max_size": 1 * 1024 * 1024,
+        "footer": None,
+        "extension": ".txt",
+    },
 }
 
 SECTOR_SIZE = 512

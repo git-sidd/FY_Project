@@ -249,8 +249,8 @@ async def _run_recovery(path: str, recursive: bool):
                 is_malicious = yara_result["threat_detected"]
                 yara_threats = yara_result["threats"]
 
-            if pred["malware_score"] >= 0.7:
-                is_malicious = True
+            # NOTE: pred["malware_score"] >= 0.7 check REMOVED — YARA is the sole authority
+            # is_malicious is set only by YARA results above
 
             # Reconstruct
             recon = reconstructor.reconstruct(
