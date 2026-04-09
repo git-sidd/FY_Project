@@ -4,6 +4,7 @@ import { ShieldCheck, HardDrive, FileText, Info, Shield, Sun, Moon, Menu, X } fr
 import Badge from './components/ui/Badge.jsx';
 import Card from './components/ui/Card.jsx';
 import FileAnalyzer from './pages/FileAnalyzer.jsx';
+import Recovery from './pages/Recovery.jsx';
 import About from './pages/About.jsx';
 
 function App() {
@@ -13,7 +14,7 @@ function App() {
 
   const navItems = [
     { id: 'analyzer', label: 'File Analyzer', icon: ShieldCheck, description: 'Analyze files' },
-    { id: 'recovery', label: 'Recovery', icon: HardDrive, comingSoon: true, description: 'Recover files' },
+    { id: 'recovery', label: 'Recovery', icon: HardDrive, description: 'Recover files' },
     { id: 'reports', label: 'Reports', icon: FileText, comingSoon: true, description: 'View reports' },
   ];
 
@@ -142,16 +143,7 @@ function App() {
           <div className="p-6 lg:p-8 max-w-7xl mx-auto w-full">
             {activeTab === 'analyzer' && <FileAnalyzer />}
 
-            {activeTab === 'recovery' && (
-              <Card title="File Recovery">
-                <div className="text-center py-8">
-                  <HardDrive className="w-12 h-12 mx-auto text-gray-400 mb-4" />
-                  <p className="text-gray-600 dark:text-gray-400">
-                    Advanced fragmented file recovery matching headers/footers. Coming soon!
-                  </p>
-                </div>
-              </Card>
-            )}
+            {activeTab === 'recovery' && <Recovery />}
 
             {activeTab === 'reports' && (
               <Card title="Historical Reports">

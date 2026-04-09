@@ -67,6 +67,7 @@ body {
     font-size: 32px;
     background: var(--gradient-primary);
     -webkit-background-clip: text;
+    background-clip: text;
     -webkit-text-fill-color: transparent;
     filter: drop-shadow(0 0 10px rgba(59,130,246,0.4));
 }
@@ -77,6 +78,7 @@ body {
     letter-spacing: -0.5px;
     background: var(--gradient-primary);
     -webkit-background-clip: text;
+    background-clip: text;
     -webkit-text-fill-color: transparent;
 }
 
@@ -256,12 +258,13 @@ body {
     font-weight: 800;
     background: var(--gradient-primary);
     -webkit-background-clip: text;
+    background-clip: text;
     -webkit-text-fill-color: transparent;
     margin-bottom: 6px;
 }
 
-.result-card.safe .result-value { background: var(--gradient-success); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.result-card.danger .result-value { background: var(--gradient-danger); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.result-card.safe .result-value { background: var(--gradient-success); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.result-card.danger .result-value { background: var(--gradient-danger); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 
 .result-sub {
     font-size: 13px;
@@ -445,7 +448,7 @@ body {
 
 .result-row {
     display: grid;
-    grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+    grid-template-columns: 2fr 1fr 0.8fr 0.8fr 0.8fr 1fr;
     gap: 12px;
     padding: 16px 20px;
     background: rgba(255, 255, 255, 0.02);
@@ -488,6 +491,9 @@ body {
 .badge-low { background: rgba(16,185,129,0.15); color: var(--accent-green); }
 .badge-medium { background: rgba(245,158,11,0.15); color: var(--accent-amber); }
 .badge-high { background: rgba(239,68,68,0.15); color: var(--accent-red); }
+.badge-disk { background: rgba(139,92,246,0.15); color: var(--accent-purple); }
+.badge-bin { background: rgba(6,182,212,0.15); color: var(--accent-cyan); }
+.badge-folder { background: rgba(148,163,184,0.15); color: var(--text-secondary); }
 
 /* ── Empty State ────────────────────────────────────── */
 .empty-state {

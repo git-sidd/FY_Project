@@ -62,6 +62,8 @@ class AppState:
 class RecoverRequest(BaseModel):
     path: str
     recursive: bool = True
+    include_recycle_bin: bool = False
+    include_disk_scan: bool = False
 
 
 # ════════════════════════════════════════════════════════
@@ -196,104 +198,153 @@ async def start_recovery(req: RecoverRequest):
         return {"error": f"Path does not exist: {req.path}"}
 
     # Run recovery in background
-    asyncio.create_task(_run_recovery(req.path, req.recursive))
+    asyncio.create_task(_run_recovery(
+        req.path, 
+        req.recursive, 
+        req.include_recycle_bin, 
+        req.include_disk_scan
+    ))
     return {"status": "started", "path": req.path}
 
 
-async def _run_recovery(path: str, recursive: bool):
-    AppState.recovery_status = {"running": True, "progress": 0, "total": 0, "message": "Starting scan...", "results": []}
+async def _run_recovery(path: str, recursive: bool, include_rb: bool, include_disk: bool):
+    AppState.recovery_status = {"running": True, "progress": 0, "total": 0, "message": "Initializing scanners...", "results": []}
 
     try:
-        scanner = FolderScanner(path, recursive=recursive)
-        total = scanner.count_files()
-        AppState.recovery_status["total"] = total
-
         yara_scanner = AppState.yara_scanner
         reconstructor = FileReconstructor(
             output_dir=os.path.join(PROJECT_ROOT, "recovered_files"),
             quarantine_dir=os.path.join(PROJECT_ROOT, "quarantine"),
         )
-
         results = []
+
+        # ── STAGE 1: Folder Scan ──
+        AppState.recovery_status["message"] = f"Scanning folder: {os.path.basename(path)}..."
+        scanner = FolderScanner(path, recursive=recursive)
+        total_files = scanner.count_files()
+        AppState.recovery_status["total"] = total_files
+
         for i, candidate in enumerate(scanner.scan_generator(), 1):
             AppState.recovery_status["progress"] = i
-            AppState.recovery_status["message"] = f"Analyzing {candidate['filename']}..."
+            AppState.recovery_status["message"] = f"Folder Scan: Analyzing {candidate['filename']}..."
+            
+            # Process candidate
+            _process_candidate(candidate, results, reconstructor, yara_scanner)
+            AppState.recovery_status["results"] = results
+            await asyncio.sleep(0.001)
 
-            if candidate.get("error"):
-                candidate["action"] = "error"
-                candidate["predicted_type"] = "ERROR"
-                candidate["confidence"] = 0
-                candidate["malware_score"] = 0
-                candidate["risk_level"] = "UNKNOWN"
-                candidate.pop("byte_array", None)
-                results.append(candidate)
-                continue
+        # ── STAGE 2: Recycle Bin Scan ──
+        if include_rb:
+            AppState.recovery_status["message"] = "Scanning Recycle Bin..."
+            rb_scanner = RecycleBinScanner(output_dir=os.path.join(PROJECT_ROOT, "recovered_files"))
+            rb_files = rb_scanner.scan()
+            
+            for candidate in rb_files:
+                AppState.recovery_status["message"] = f"Recycle Bin: Analyzing {candidate['filename']}..."
+                _process_candidate(candidate, results, reconstructor, yara_scanner)
+                AppState.recovery_status["results"] = results
+                await asyncio.sleep(0.001)
 
-            # AI Classification
-            byte_array = candidate["byte_array"].astype(np.float32)
-            if AppState.hybrid_model:
-                pred = AppState.hybrid_model.predict_single(byte_array)
+        # ── STAGE 3: Raw Disk Scan ──
+        if include_disk:
+            disk_scanner = DiskScanner(output_dir=os.path.join(PROJECT_ROOT, "recovered_files"))
+            if disk_scanner.is_admin:
+                AppState.recovery_status["message"] = "Starting Raw Disk Scan (Sector Carving)..."
+                
+                def disk_prog(cur, total, found):
+                    AppState.recovery_status["message"] = f"Disk Carving: Sector {cur:,}/{total:,} | Found: {found}"
+
+                found_disk = disk_scanner.scan_for_deleted_files(
+                    max_sectors=2000000, 
+                    progress_callback=disk_prog
+                )
+
+                for candidate in found_disk:
+                    AppState.recovery_status["message"] = f"Disk Carving: Analyzing fragment {candidate['filename']}..."
+                    _process_candidate(candidate, results, reconstructor, yara_scanner)
+                    AppState.recovery_status["results"] = results
+                    await asyncio.sleep(0.001)
             else:
-                pred = {"predicted_class_idx": 0, "confidence": 0.5, "malware_score": 0.1, "risk_level": "LOW"}
+                AppState.recovery_status["message"] = "Skipping Disk Scan: Admin rights required."
+                await asyncio.sleep(2)
 
-            pred_idx = pred["predicted_class_idx"]
-            pred_type = AppState.label_decoder[pred_idx] if pred_idx < len(AppState.label_decoder) else f"Type_{pred_idx}"
+        # Generate report
+        verifier = IntegrityVerifier(output_dir=os.path.join(PROJECT_ROOT, "outputs"))
+        # Mock summaries for combined report
+        scan_summary = {"sources": ["folder"] + (["recycle_bin"] if include_rb else []) + (["disk"] if include_disk else [])}
+        recon_summary = reconstructor.get_summary()
+        report = verifier.generate_report(results, scan_summary, recon_summary)
+        verifier.save_report(report)
 
-            # YARA scan
-            is_malicious = False
-            yara_threats = []
-            if yara_scanner:
+        AppState.recovery_status["message"] = "Recovery complete! See Results tab."
+        AppState.recovery_status["running"] = False
+        AppState.recovery_status["report"] = report
+
+    except Exception as e:
+        AppState.recovery_status["message"] = f"Error during recovery: {str(e)}"
+        AppState.recovery_status["running"] = False
+
+
+def _process_candidate(candidate, results, reconstructor, yara_scanner):
+    """Helper to classify and reconstruct a candidate file."""
+    try:
+        if candidate.get("error"):
+            candidate["action"] = "error"
+            candidate["predicted_type"] = "ERROR"
+            results.append(candidate)
+            return
+
+        # AI Classification
+        byte_array = candidate["byte_array"].astype(np.float32)
+        if AppState.hybrid_model:
+            pred = AppState.hybrid_model.predict_single(byte_array)
+        else:
+            pred = {"predicted_class_idx": 0, "confidence": 0.5, "malware_score": 0.1, "risk_level": "LOW"}
+
+        pred_idx = pred["predicted_class_idx"]
+        pred_type = AppState.label_decoder[pred_idx] if pred_idx < len(AppState.label_decoder) else f"Type_{pred_idx}"
+
+        # YARA scan
+        is_malicious = False
+        yara_threats = []
+        if yara_scanner:
+            try:
+                # For carved files, filepath is the temp path in recovered_files
                 with open(candidate["filepath"], "rb") as f:
                     file_data = f.read()
                 yara_result = yara_scanner.scan_bytes(file_data, candidate["filename"])
                 is_malicious = yara_result["threat_detected"]
                 yara_threats = yara_result["threats"]
+            except:
+                pass
 
-            # NOTE: pred["malware_score"] >= 0.7 check REMOVED — YARA is the sole authority
-            # is_malicious is set only by YARA results above
+        # Reconstruct
+        recon = reconstructor.reconstruct(
+            filepath=candidate["filepath"],
+            predicted_type=pred_type,
+            header_intact=not candidate.get("header_empty", False),
+            is_malicious=is_malicious,
+            confidence=pred["confidence"],
+        )
 
-            # Reconstruct
-            recon = reconstructor.reconstruct(
-                filepath=candidate["filepath"],
-                predicted_type=pred_type,
-                header_intact=not candidate["header_empty"],
-                is_malicious=is_malicious,
-                confidence=pred["confidence"],
-            )
-
-            entry = {
-                "filename": candidate["filename"],
-                "filepath": candidate["filepath"],
-                "file_size": candidate["file_size"],
-                "sha256": candidate["sha256"],
-                "predicted_type": pred_type,
-                "confidence": round(pred["confidence"] * 100, 2),
-                "malware_score": round(pred["malware_score"], 4),
-                "risk_level": pred["risk_level"],
-                "yara_threats": yara_threats,
-                "action": recon["action"],
-                "repairs": recon.get("repairs", []),
-                "output_path": recon.get("output_path", ""),
-            }
-            results.append(entry)
-
-            AppState.recovery_status["results"] = results
-            await asyncio.sleep(0.01)  # yield control
-
-        # Generate report
-        verifier = IntegrityVerifier(output_dir=os.path.join(PROJECT_ROOT, "outputs"))
-        scan_summary = scanner.get_summary()
-        recon_summary = reconstructor.get_summary()
-        report = verifier.generate_report(results, scan_summary, recon_summary)
-        verifier.save_report(report)
-
-        AppState.recovery_status["message"] = "Recovery complete!"
-        AppState.recovery_status["running"] = False
-        AppState.recovery_status["report"] = report
-
+        entry = {
+            "filename": candidate["filename"],
+            "filepath": candidate["filepath"],
+            "file_size": candidate.get("file_size", 0),
+            "sha256": candidate.get("sha256", ""),
+            "predicted_type": pred_type,
+            "confidence": round(pred["confidence"] * 100, 2),
+            "malware_score": round(pred["malware_score"], 4),
+            "risk_level": pred["risk_level"],
+            "yara_threats": yara_threats,
+            "action": recon["action"],
+            "repairs": recon.get("repairs", []),
+            "output_path": recon.get("output_path", ""),
+            "source": candidate.get("source", "folder"),
+        }
+        results.append(entry)
     except Exception as e:
-        AppState.recovery_status["message"] = f"Error: {str(e)}"
-        AppState.recovery_status["running"] = False
+        print(f"Error processing {candidate.get('filename')}: {e}")
 
 
 @app.get("/recover/status")

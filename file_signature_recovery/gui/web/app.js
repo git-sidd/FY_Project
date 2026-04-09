@@ -136,9 +136,12 @@ async function startRecovery() {
     }
 
     const recursive = document.getElementById("recursiveCheck").checked;
+    const include_recycle_bin = document.getElementById("recycleBinCheck").checked;
+    const include_disk_scan = document.getElementById("diskScanCheck").checked;
+    
     const btn = document.getElementById("startRecoveryBtn");
     btn.disabled = true;
-    btn.innerHTML = '<span class="btn-icon">⏳</span> Scanning...';
+    btn.innerHTML = '<span class="btn-icon">⏳</span> Recovering...';
 
     document.getElementById("recoveryProgress").style.display = "block";
     document.getElementById("recoverySummary").style.display = "none";
@@ -147,7 +150,12 @@ async function startRecovery() {
         const res = await fetch(`${API_BASE}/recover`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ path, recursive })
+            body: JSON.stringify({ 
+                path, 
+                recursive,
+                include_recycle_bin, 
+                include_disk_scan
+            })
         });
 
         const data = await res.json();
@@ -175,13 +183,25 @@ async function pollRecoveryStatus() {
             const data = await res.json();
 
             const progress = data.progress || 0;
-            const total = data.total || 1;
-            const percent = Math.round((progress / total) * 100);
+            const total = data.total || 0;
+            const message = data.message || "";
+            
+            // Handle progress bar
+            let percent = 0;
+            if (total > 0) {
+                percent = Math.round((progress / total) * 100);
+            } else if (message.includes("Disk Carving")) {
+                // For disk carving, we use a slower pulse or indeterminate if needed,
+                // but main.py provides "Sector X/Y" in the message.
+                percent = 50; // Visual indicator it's busy
+            } else if (message.includes("Scan")) {
+                percent = 10;
+            }
 
             document.getElementById("progressFill").style.width = `${percent}%`;
-            document.getElementById("progressText").textContent = `${progress} / ${total} files`;
-            document.getElementById("progressPercent").textContent = `${percent}%`;
-            document.getElementById("progressMessage").textContent = data.message || "";
+            document.getElementById("progressText").textContent = total > 0 ? `${progress} / ${total} files` : "Scanning...";
+            document.getElementById("progressPercent").textContent = total > 0 ? `${percent}%` : "";
+            document.getElementById("progressMessage").textContent = message;
 
             if (!data.running) {
                 clearInterval(interval);
@@ -245,6 +265,13 @@ function renderResults(results) {
                 ? '<span class="badge badge-medium">MEDIUM</span>'
                 : '<span class="badge badge-high">HIGH</span>';
 
+        const source = r.source || "folder";
+        const sourceBadge = source === "disk_scan" 
+            ? '<span class="badge badge-disk">💿 DISK</span>' 
+            : source === "recycle_bin" 
+                ? '<span class="badge badge-bin">🗑️ BIN</span>' 
+                : '<span class="badge badge-folder">📁 FOLD</span>';
+
         const row = document.createElement("div");
         row.className = "result-row";
         row.dataset.action = r.action;
@@ -253,6 +280,7 @@ function renderResults(results) {
             <div class="filename" title="${r.filepath || ''}">${r.filename || "unknown"}</div>
             <div class="file-type">${r.predicted_type || "?"}</div>
             <div class="confidence">${r.confidence || 0}%</div>
+            <div>${sourceBadge}</div>
             <div>${riskBadge}</div>
             <div>${actionBadge}</div>
         `;
