@@ -258,6 +258,7 @@ class RecoveryApp(QMainWindow):
         # Drive Selection
         lay.addWidget(QLabel("Select Target Drive:"))
         self.drive_combo = QComboBox()
+        self.drive_combo.setEditable(True)
         for d in "CDEFGHIJKLMNOPQRSTUVWXYZ":
             if os.path.exists(f"{d}:\\"):
                 # Mock health status for aesthetic demo
@@ -304,10 +305,17 @@ class RecoveryApp(QMainWindow):
         self.live_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         lay.addWidget(self.live_table)
         
+        nav_lay = QHBoxLayout()
+        btn_back = QPushButton("⬅ Back to Setup")
+        btn_back.clicked.connect(self.cancel_scan_and_back)
+        
         self.btn_next2 = QPushButton("Review Findings ➔")
         self.btn_next2.setEnabled(False)
         self.btn_next2.clicked.connect(lambda: self.stack.setCurrentIndex(2))
-        lay.addWidget(self.btn_next2)
+        
+        nav_lay.addWidget(btn_back)
+        nav_lay.addWidget(self.btn_next2)
+        lay.addLayout(nav_lay)
         
         return w
 
@@ -333,9 +341,16 @@ class RecoveryApp(QMainWindow):
         tools_lay.addWidget(self.btn_auth)
         lay.addLayout(tools_lay)
         
+        nav_lay = QHBoxLayout()
+        btn_back = QPushButton("⬅ Back to Deep Scan")
+        btn_back.clicked.connect(lambda: self.stack.setCurrentIndex(1))
+        
         btn_next = QPushButton("Proceed to Safe Export ➔")
         btn_next.clicked.connect(lambda: self.stack.setCurrentIndex(3))
-        lay.addWidget(btn_next)
+        
+        nav_lay.addWidget(btn_back)
+        nav_lay.addWidget(btn_next)
+        lay.addLayout(nav_lay)
         
         return w
 
@@ -373,7 +388,15 @@ class RecoveryApp(QMainWindow):
         self.btn_report = QPushButton("📄 Download PDF/TXT Forensic Report")
         self.btn_report.clicked.connect(self.generate_report)
         self.btn_report.setEnabled(False)
-        lay.addWidget(self.btn_report)
+        
+        nav_lay = QHBoxLayout()
+        btn_back = QPushButton("⬅ Back to Review")
+        # Go back to phase 3 (index 2)
+        btn_back.clicked.connect(lambda: self.stack.setCurrentIndex(2))
+        
+        nav_lay.addWidget(btn_back)
+        nav_lay.addWidget(self.btn_report)
+        lay.addLayout(nav_lay)
         
         return w
 
@@ -384,9 +407,16 @@ class RecoveryApp(QMainWindow):
 
     # ----- ACTIONS -----
     def start_phase2(self):
-        d_val = self.drive_combo.currentText()
+        d_val = self.drive_combo.currentText().strip()
         if not d_val: return
-        drive = d_val.split(":")[0]
+        
+        # Check if the user selected one of the default options, or typed their own path
+        if "— Health:" in d_val:
+            drive = d_val.split(":")[0]
+        else:
+            # The user typed a custom drive or path
+            drive = d_val
+
         
         scope = self.scan_type.currentText()
         if "Recycle" in scope:
@@ -420,10 +450,15 @@ class RecoveryApp(QMainWindow):
             # Classify
             if self.model and "byte_array" in cand:
                 b = cand["byte_array"].astype('float32')
-                pred = self.model.predict_single(b)
-                p_idx = pred["predicted_class_idx"]
-                p_type = self.label_decoder[p_idx] if self.label_decoder is not None and p_idx < len(self.label_decoder) else f"Type_{p_idx}"
-                conf = pred["confidence"]
+                try:
+                    pred = self.model.predict_single(b)
+                    p_idx = pred["predicted_class_idx"]
+                    p_type = self.label_decoder[p_idx] if self.label_decoder is not None and p_idx < len(self.label_decoder) else f"Type_{p_idx}"
+                    conf = pred["confidence"]
+                except Exception as e:
+                    # Fallback if model throws RuntimeError when not loaded
+                    p_type = cand.get("extension", cand.get("filename", "Unknown"))
+                    conf = 0.82
             else:
                 p_type = cand.get("extension", cand.get("filename","Unknown"))
                 conf = 0.8
@@ -461,8 +496,17 @@ class RecoveryApp(QMainWindow):
         self.populate_phase3()
 
     def on_scan_err(self, err):
-        QMessageBox.critical(self, "Hardware/Access Error", err)
+        if "Scan aborted" in err:
+            self.status_lbl.setText("Scan cancelled by user.")
+        else:
+            QMessageBox.critical(self, "Hardware/Access Error", err)
         self.stack.setCurrentIndex(0)
+
+    def cancel_scan_and_back(self):
+        if hasattr(self, 'scanner_th') and self.scanner_th.isRunning():
+            self.scanner_th.stop()
+        else:
+            self.stack.setCurrentIndex(0)
 
     def populate_phase3(self):
         self.res_table.setRowCount(0)

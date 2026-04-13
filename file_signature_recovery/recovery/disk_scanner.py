@@ -162,7 +162,10 @@ class DiskScanner:
     """
 
     def __init__(self, drive_letter: str = "C", output_dir: str = "recovered_files"):
-        self.drive_letter = drive_letter.rstrip(":\\")
+        if drive_letter.endswith(":\\") and len(drive_letter) <= 3:
+            self.drive_letter = drive_letter.rstrip(":\\")
+        else:
+            self.drive_letter = drive_letter
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.handle = None
@@ -180,13 +183,22 @@ class DiskScanner:
 
     def open_drive(self) -> bool:
         """Open the drive volume for raw sector reading."""
-        if not self.is_admin:
+        # Check if the user passed an existing file path (e.g., .dd image) or a specific physical drive path
+        if os.path.exists(self.drive_letter) and os.path.isfile(self.drive_letter):
+            drive_path = self.drive_letter
+            is_file = True
+        elif self.drive_letter.startswith("\\\\.\\"):
+            drive_path = self.drive_letter
+            is_file = False
+        else:
+            drive_path = f"\\\\.\\{self.drive_letter}:"
+            is_file = False
+
+        if not self.is_admin and not is_file:
             print("[!] ERROR: Administrator privileges required for raw disk access.")
-            print("    Right-click PowerShell → 'Run as Administrator'")
+            print("    Right-click PowerShell -> 'Run as Administrator'")
             print("    Then run the command again.")
             return False
-
-        drive_path = f"\\\\.\\{self.drive_letter}:"
 
         GENERIC_READ = 0x80000000
         FILE_SHARE_READ = 0x01
