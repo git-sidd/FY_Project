@@ -16,6 +16,7 @@ How it works:
     5. If safe (YARA check passes), the file is saved to the recovery folder
 """
 
+import shutil
 import os
 import sys
 import ctypes
@@ -270,8 +271,7 @@ class DiskScanner:
         start_sector: int = 0,
         progress_callback=None,
     ) -> list[dict]:
-        """
-        Scan disk sectors for file signatures of deleted files.
+        """Scan disk sectors for file signatures of deleted files.
 
         Parameters
         ----------
@@ -280,7 +280,7 @@ class DiskScanner:
         start_sector : int
             Sector to start scanning from
         progress_callback : callable
-            Called with (current_sector, max_sectors, found_count) for progress updates
+            Called with (current_sector, max_sectors, found_count) for progress
 
         Returns
         -------
@@ -289,7 +289,8 @@ class DiskScanner:
         if not self.open_drive():
             return []
 
-        print(f"\n[*] Scanning up to {max_sectors:,} sectors ({max_sectors * 512 / 1024 / 1024:.1f} MB)...")
+        print(f"\n[*] Scanning up to {max_sectors:,} sectors "
+              f"({max_sectors * 512 / 1024 / 1024:.1f} MB)...")
         print(f"    Looking for: {', '.join(DISK_SIGNATURES.keys())}")
 
         self.found_files = []
@@ -306,18 +307,13 @@ class DiskScanner:
 
                 self.sectors_scanned = sector - start_sector
 
-                # Check each sector-aligned position in the chunk
                 for offset in range(0, len(data) - 4, SECTOR_SIZE):
                     block = data[offset:]
-
-                    # Try matching each file signature
                     for sig_name, sig_info in DISK_SIGNATURES.items():
                         magic = sig_info["magic"]
                         if block[:len(magic)] == magic:
-                            # Found a signature!
                             abs_sector = sector + (offset // SECTOR_SIZE)
                             carved = self._carve_file(abs_sector, sig_info, sig_name)
-
                             if carved is not None:
                                 self.found_files.append(carved)
                                 print(f"    [+] Found {sig_name} at sector {abs_sector:,} "
@@ -335,6 +331,30 @@ class DiskScanner:
 
         print(f"\n[OK] Scanned {self.sectors_scanned:,} sectors, found {len(self.found_files)} file(s)")
         return self.found_files
+
+    def recover_file_by_path(self, original_path: str, max_sectors: int = 200000) -> dict | None:
+        """Recover a permanently deleted file using its original absolute path.
+
+        Scans the raw disk for signatures matching the file's extension and
+        returns the first matching carved fragment, or ``None``.
+        """
+        if not os.path.isabs(original_path):
+            return None
+        ext = os.path.splitext(original_path)[1].lower()
+        matching_sigs = {k: v for k, v in DISK_SIGNATURES.items()
+                         if v.get("extension", "").lower() == ext}
+        if not matching_sigs:
+            matching_sigs = dict(DISK_SIGNATURES)
+
+        original_signatures = dict(DISK_SIGNATURES)
+        try:
+            DISK_SIGNATURES.clear()
+            DISK_SIGNATURES.update(matching_sigs)
+            results = self.scan_for_deleted_files(max_sectors=max_sectors)
+            return results[0] if results else None
+        finally:
+            DISK_SIGNATURES.clear()
+            DISK_SIGNATURES.update(original_signatures)
 
     def _carve_file(self, start_sector: int, sig_info: dict, sig_name: str) -> dict | None:
         """
@@ -439,6 +459,110 @@ class RecycleBinScanner:
 
         print(f"[OK] Found {len(self.found_files)} file(s) in Recycle Bin")
         return self.found_files
+
+    def scan_folder(self, folder_path: str) -> list[dict]:
+        """Return all Recycle Bin entries whose original path is inside *folder_path*.
+
+        The comparison is case-insensitive to handle Windows path casing variations.
+        """
+        all_files = self.scan()
+        folder_norm = os.path.normpath(folder_path).lower()
+        matched = []
+        for f in all_files:
+            orig = os.path.normpath(f.get("original_path", "")).lower()
+            # Accept if the original file lived directly in the folder or any subfolder
+            if orig.startswith(folder_norm + os.sep) or orig == folder_norm:
+                matched.append(f)
+        print(f"[OK] {len(matched)} file(s) matched folder: {folder_path}")
+        return matched
+
+    def restore_to_folder(
+        self,
+        folder_path: str,
+        dest_dir: str,
+        progress_callback=None,
+    ) -> list[dict]:
+        """Recover all files deleted from *folder_path* and save them to *dest_dir*.
+
+        For each matched Recycle Bin entry the underlying ``$R`` file is copied
+        to *dest_dir* using the **original filename**.  A SHA-256 hash is computed
+        on the restored copy to verify integrity.
+
+        Parameters
+        ----------
+        folder_path : str
+            Absolute path of the folder the user deleted the files from.
+        dest_dir : str
+            Directory where recovered files will be saved.
+        progress_callback : callable, optional
+            Called with (current_index, total, filename) for progress reporting.
+
+        Returns
+        -------
+        list of dict
+            Each dict has keys: filename, original_path, dest_path, sha256, status, error.
+        """
+        import hashlib
+
+        matched = self.scan_folder(folder_path)
+        dest = Path(dest_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+
+        results = []
+        total = len(matched)
+
+        for idx, entry in enumerate(matched):
+            filename = entry.get("filename", f"recovered_{idx}")
+            src_path = Path(entry.get("filepath", ""))
+            dest_path = dest / filename
+            result = {
+                "filename": filename,
+                "original_path": entry.get("original_path", ""),
+                "dest_path": str(dest_path),
+                "sha256": "",
+                "status": "pending",
+                "error": None,
+                "file_size": entry.get("file_size", 0),
+            }
+
+            if progress_callback:
+                progress_callback(idx, total, filename)
+
+            try:
+                if not src_path.exists():
+                    result["status"] = "error"
+                    result["error"] = f"$R file not found: {src_path}"
+                    results.append(result)
+                    continue
+
+                # Handle filename collision — append index suffix
+                if dest_path.exists():
+                    stem = dest_path.stem
+                    suffix = dest_path.suffix
+                    dest_path = dest / f"{stem}_{idx}{suffix}"
+                    result["dest_path"] = str(dest_path)
+
+                shutil.copy2(str(src_path), str(dest_path))
+
+                # SHA-256 integrity check
+                sha256 = hashlib.sha256(dest_path.read_bytes()).hexdigest()
+                result["sha256"] = sha256
+                result["status"] = "recovered"
+                print(f"    [+] Restored {filename} → {dest_path}  ({sha256[:12]}…)")
+
+            except Exception as exc:
+                result["status"] = "error"
+                result["error"] = str(exc)
+                print(f"    [!] Failed to restore {filename}: {exc}")
+
+            results.append(result)
+
+        if progress_callback:
+            progress_callback(total, total, "done")
+
+        recovered = sum(1 for r in results if r["status"] == "recovered")
+        print(f"[OK] Recovered {recovered}/{total} file(s) to: {dest_dir}")
+        return results
 
     def _find_recycle_bins(self) -> list[Path]:
         """Find all $Recycle.Bin directories on available drives."""

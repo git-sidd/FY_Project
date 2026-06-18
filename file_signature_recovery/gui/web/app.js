@@ -128,6 +128,26 @@ async function analyzeFile(file) {
 // Recovery Scan
 // ════════════════════════════════════════════════════════
 
+function toggleScanMode() {
+    const mode = document.querySelector('input[name="scanMode"]:checked').value;
+    const standardOpts = document.getElementById("standardOptions");
+    const forensicOpts = document.getElementById("forensicOptions");
+    const modeStandardLabel = document.getElementById("modeStandardLabel");
+    const modeDeletedLabel = document.getElementById("modeDeletedLabel");
+
+    if (mode === "deleted") {
+        standardOpts.style.display = "none";
+        forensicOpts.style.display = "block";
+        modeStandardLabel.style.color = "var(--text-secondary)";
+        modeDeletedLabel.style.color = "var(--text-primary)";
+    } else {
+        standardOpts.style.display = "flex";
+        forensicOpts.style.display = "none";
+        modeStandardLabel.style.color = "var(--text-primary)";
+        modeDeletedLabel.style.color = "var(--text-secondary)";
+    }
+}
+
 async function startRecovery() {
     const path = document.getElementById("folderPath").value.trim();
     if (!path) {
@@ -135,9 +155,7 @@ async function startRecovery() {
         return;
     }
 
-    const recursive = document.getElementById("recursiveCheck").checked;
-    const include_recycle_bin = document.getElementById("recycleBinCheck").checked;
-    const include_disk_scan = document.getElementById("diskScanCheck").checked;
+    const mode = document.querySelector('input[name="scanMode"]:checked').value;
     
     const btn = document.getElementById("startRecoveryBtn");
     btn.disabled = true;
@@ -147,16 +165,40 @@ async function startRecovery() {
     document.getElementById("recoverySummary").style.display = "none";
 
     try {
-        const res = await fetch(`${API_BASE}/recover`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ 
-                path, 
-                recursive,
-                include_recycle_bin, 
-                include_disk_scan
-            })
-        });
+        let res;
+        if (mode === "deleted") {
+            const filename = document.getElementById("forensicFilename").value.trim() || null;
+            const extension = document.getElementById("forensicExtension").value.trim() || null;
+            const time_start = document.getElementById("forensicTimeStart").value || null;
+            const time_end = document.getElementById("forensicTimeEnd").value || null;
+            
+            res = await fetch(`${API_BASE}/recover/deleted`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    path,
+                    filename,
+                    extension,
+                    time_start,
+                    time_end
+                })
+            });
+        } else {
+            const recursive = document.getElementById("recursiveCheck").checked;
+            const include_recycle_bin = document.getElementById("recycleBinCheck").checked;
+            const include_disk_scan = document.getElementById("diskScanCheck").checked;
+            
+            res = await fetch(`${API_BASE}/recover`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ 
+                    path, 
+                    recursive,
+                    include_recycle_bin, 
+                    include_disk_scan
+                })
+            });
+        }
 
         const data = await res.json();
         if (data.error) {

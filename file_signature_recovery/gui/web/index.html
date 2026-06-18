@@ -100,6 +100,17 @@
             <h2>🔄 Recovery Scan</h2>
             <p class="card-desc">Enter a folder path to scan for deleted, corrupted, or disguised files. The AI will analyze each file, check for malware, and attempt recovery.</p>
 
+            <div class="scan-mode-toggle" style="margin-bottom: 20px; display: flex; gap: 24px; border-bottom: 1px solid var(--border-glass); padding-bottom: 12px;">
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--text-primary);" id="modeStandardLabel">
+                    <input type="radio" name="scanMode" value="standard" checked onchange="toggleScanMode()" style="accent-color: var(--accent-blue);">
+                    <span>Standard Scan</span>
+                </label>
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--text-secondary);" id="modeDeletedLabel">
+                    <input type="radio" name="scanMode" value="deleted" onchange="toggleScanMode()" style="accent-color: var(--accent-blue);">
+                    <span>Forensic Deleted Recovery</span>
+                </label>
+            </div>
+
             <div class="input-group">
                 <input type="text" id="folderPath" placeholder="Enter folder path, e.g. C:\Users\Dell\Desktop\TestFiles" class="folder-input">
                 <button id="startRecoveryBtn" class="btn-primary" onclick="startRecovery()">
@@ -107,10 +118,33 @@
                 </button>
             </div>
 
-            <div class="checkbox-group">
+            <div class="checkbox-group" id="standardOptions">
                 <label><input type="checkbox" id="recursiveCheck" checked> Scan subfolders recursively</label>
                 <label><input type="checkbox" id="recycleBinCheck"> Include Recycle Bin search</label>
                 <label><input type="checkbox" id="diskScanCheck"> Include Raw Disk carving (Admin required)</label>
+            </div>
+
+            <div id="forensicOptions" style="display:none; margin-top: 16px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+                    <div>
+                        <label style="display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; font-weight: 500;">Filename Filter (optional):</label>
+                        <input type="text" id="forensicFilename" placeholder="e.g. report.pdf" class="folder-input" style="width: 100%;">
+                    </div>
+                    <div>
+                        <label style="display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; font-weight: 500;">Extension Filter (optional):</label>
+                        <input type="text" id="forensicExtension" placeholder="e.g. pdf" class="folder-input" style="width: 100%;">
+                    </div>
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px;">
+                    <div>
+                        <label style="display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; font-weight: 500;">Deletion Time Start (optional):</label>
+                        <input type="datetime-local" id="forensicTimeStart" class="folder-input" style="width: 100%; color-scheme: dark;">
+                    </div>
+                    <div>
+                        <label style="display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; font-weight: 500;">Deletion Time End (optional):</label>
+                        <input type="datetime-local" id="forensicTimeEnd" class="folder-input" style="width: 100%; color-scheme: dark;">
+                    </div>
+                </div>
             </div>
         </div>
 

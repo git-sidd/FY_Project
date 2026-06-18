@@ -4,12 +4,15 @@ import pickle
 import datetime
 import shutil
 from pathlib import Path
+import numpy as np
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QPushButton, QComboBox, QCheckBox, QStackedWidget, 
     QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, 
-    QFileDialog, QMessageBox, QFrame
+    QFileDialog, QMessageBox, QFrame, QLineEdit, QDialog, QFormLayout, QDateTimeEdit
 )
+# pyrefly: ignore [parse-error]
+
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QColor, QPalette, QFont, QIcon, QPainter, QBrush, QAction
 
@@ -61,12 +64,12 @@ class ScannerThread(QThread):
                     self.progress_update.emit(cur, total, found)
 
                 found = scanner.scan_for_deleted_files(
-                    max_sectors=self.kwargs.get("sectors", 500000), # Default read ~250MB
+                    max_sectors=self.kwargs.get("sectors", 500000),
                     progress_callback=cb
                 )
                 self.results = found
                 self.scan_complete.emit(self.results)
-                
+
             elif self.mode == "recycle_bin":
                 scanner = RecycleBinScanner()
                 self.results = scanner.scan()
@@ -77,6 +80,167 @@ class ScannerThread(QThread):
 
     def stop(self):
         self._is_running = False
+
+
+# ----- WORKER THREAD FOR FOLDER-BASED RECYCLE BIN RECOVERY -----
+class RecycleBinRestoreThread(QThread):
+    """Run RecycleBinScanner.restore_to_folder() in a background thread
+    so the UI remains responsive during scanning.
+    """
+    progress_update = pyqtSignal(int, int, str)   # current, total, filename
+    restore_complete = pyqtSignal(list)            # list of result dicts
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, folder_path: str, dest_dir: str):
+        super().__init__()
+        self.folder_path = folder_path
+        self.dest_dir = dest_dir
+
+    def run(self):
+        try:
+            scanner = RecycleBinScanner(output_dir=self.dest_dir)
+
+            def _cb(cur, total, filename):
+                self.progress_update.emit(cur, total, str(filename))
+
+            results = scanner.restore_to_folder(
+                self.folder_path, self.dest_dir, progress_callback=_cb
+            )
+            self.restore_complete.emit(results)
+        except Exception as exc:
+            self.error_occurred.emit(str(exc))
+
+
+# ----- WORKER THREAD FOR PERMANENT DELETED FORENSIC RECOVERY -----
+class PermanentRecoveryThread(QThread):
+    progress_update = pyqtSignal(str, str, float) # phase, detail, pct
+    recovery_complete = pyqtSignal(list)          # list of recovered items
+    error_occurred = pyqtSignal(str)
+    
+    def __init__(self, folder_path: str, dest_dir: str, filename: str = None, extension: str = None, time_start: str = None, time_end: str = None):
+        super().__init__()
+        self.folder_path = folder_path
+        self.dest_dir = dest_dir
+        self.filename = filename
+        self.extension = extension
+        self.time_start = time_start
+        self.time_end = time_end
+        
+    def run(self):
+        try:
+            from recovery.deleted_file_recovery import DeletedFileRecovery
+            orchestrator = DeletedFileRecovery(output_dir=self.dest_dir)
+            
+            def cb(phase, detail, pct):
+                self.progress_update.emit(phase, detail, pct)
+                
+            results = orchestrator.recover(
+                original_folder_path=self.folder_path,
+                filename=self.filename,
+                extension=self.extension,
+                deletion_time_start=self.time_start,
+                deletion_time_end=self.time_end,
+                progress_callback=cb
+            )
+            self.recovery_complete.emit(results)
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+
+# ----- PARAMETERS DIALOG FOR PERMANENT RECOVERY -----
+class PermanentRecoveryDialog(QDialog):
+    def __init__(self, parent=None, default_folder="", default_dest=""):
+        super().__init__(parent)
+        self.setWindowTitle("Forensic Permanent Delete Recovery")
+        self.setMinimumWidth(450)
+        
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #11111b;
+                color: #cdd6f4;
+            }
+            QLabel {
+                color: #cdd6f4;
+                font-size: 13px;
+                font-weight: 500;
+            }
+            QLineEdit, QDateTimeEdit {
+                background-color: #1e1e2e;
+                border: 1px solid #313244;
+                border-radius: 4px;
+                padding: 6px;
+                color: #cdd6f4;
+            }
+            QPushButton {
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        
+        title = QLabel("Forensic Recovery Parameters")
+        title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+        title.setStyleSheet("color: #cba6f7; margin-bottom: 12px;")
+        layout.addWidget(title)
+        
+        form = QFormLayout()
+        
+        self.folder_edit = QLineEdit(default_folder)
+        self.folder_edit.setPlaceholderText("e.g. C:\\Users\\Acer\\Documents")
+        form.addRow("Original Folder Path:", self.folder_edit)
+        
+        self.dest_edit = QLineEdit(default_dest)
+        form.addRow("Destination Folder:", self.dest_edit)
+        
+        self.file_edit = QLineEdit()
+        self.file_edit.setPlaceholderText("e.g. report.pdf (optional)")
+        form.addRow("Filename Filter:", self.file_edit)
+        
+        self.ext_edit = QLineEdit()
+        self.ext_edit.setPlaceholderText("e.g. pdf (optional)")
+        form.addRow("Extension Filter:", self.ext_edit)
+        
+        self.use_time_start = QCheckBox("Filter by Deletion Time Start")
+        self.time_start_edit = QDateTimeEdit(datetime.datetime.now() - datetime.timedelta(days=7))
+        self.time_start_edit.setCalendarPopup(True)
+        self.time_start_edit.setEnabled(False)
+        self.use_time_start.toggled.connect(self.time_start_edit.setEnabled)
+        form.addRow(self.use_time_start, self.time_start_edit)
+        
+        self.use_time_end = QCheckBox("Filter by Deletion Time End")
+        self.time_end_edit = QDateTimeEdit(datetime.datetime.now())
+        self.time_end_edit.setCalendarPopup(True)
+        self.time_end_edit.setEnabled(False)
+        self.use_time_end.toggled.connect(self.time_end_edit.setEnabled)
+        form.addRow(self.use_time_end, self.time_end_edit)
+        
+        layout.addLayout(form)
+        
+        btn_box = QHBoxLayout()
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.setStyleSheet("background-color: #313244; color: #cdd6f4;")
+        btn_cancel.clicked.connect(self.reject)
+        
+        btn_start = QPushButton("Start Recovery")
+        btn_start.setStyleSheet("background-color: #a6e3a1; color: #11111b;")
+        btn_start.clicked.connect(self.accept)
+        
+        btn_box.addWidget(btn_cancel)
+        btn_box.addWidget(btn_start)
+        layout.addLayout(btn_box)
+
+    def get_values(self):
+        return {
+            "folder": self.folder_edit.text().strip(),
+            "dest": self.dest_edit.text().strip(),
+            "filename": self.file_edit.text().strip() or None,
+            "extension": self.ext_edit.text().strip() or None,
+            "time_start": self.time_start_edit.dateTime().toPyDateTime().isoformat() if self.use_time_start.isChecked() else None,
+            "time_end": self.time_end_edit.dateTime().toPyDateTime().isoformat() if self.use_time_end.isChecked() else None
+        }
+
 
 # ----- PROBABILITY MAP WIDGET -----
 class ProbabilityMap(QWidget):
@@ -272,7 +436,7 @@ class RecoveryApp(QMainWindow):
         lay.addWidget(self.chk_image)
         
         self.scan_type = QComboBox()
-        self.scan_type.addItems(["Unallocated (Deleted) Space — PyTSK3 Raw Sectors", "Recycle Bin Scan", "Entire Drive"])
+        self.scan_type.addItems(["Unallocated (Deleted) Space — PyTSK3 Raw Sectors", "Recycle Bin Scan", "Entire Drive", "Permanent Delete Recovery"])
         lay.addWidget(QLabel("Target Scope:"))
         lay.addWidget(self.scan_type)
         
@@ -281,7 +445,41 @@ class RecoveryApp(QMainWindow):
         btn_start.clicked.connect(self.start_phase2)
         lay.addSpacing(30)
         lay.addWidget(btn_start)
-        
+
+        # ── Recycle Bin folder recovery ─────────────────────────────────────
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setStyleSheet("color: #313244; margin-top: 14px; margin-bottom: 4px;")
+        lay.addWidget(separator)
+
+        rb_lbl = QLabel("♻️  Recycle Bin Recovery — recover all files from a deleted folder")
+        rb_lbl.setStyleSheet("font-weight: bold; font-size: 13px; color: #a6e3a1; margin-bottom: 4px;")
+        lay.addWidget(rb_lbl)
+
+        lay.addWidget(QLabel("Original folder path (where the files were before deletion):"))
+        self.perm_path_edit = QLineEdit()
+        self.perm_path_edit.setPlaceholderText("e.g.  C:\\Users\\Acer\\Documents\\MyProject")
+        lay.addWidget(self.perm_path_edit)
+
+        dest_row = QHBoxLayout()
+        lay.addWidget(QLabel("Destination folder (where to save recovered files):"))
+        self.rb_dest_edit = QLineEdit()
+        self.rb_dest_edit.setText(os.path.join(SCRIPT_DIR, "recovered_files"))
+        btn_browse_rb = QPushButton("Browse…")
+        btn_browse_rb.setFixedWidth(90)
+        btn_browse_rb.clicked.connect(self._browse_rb_dest)
+        dest_row.addWidget(self.rb_dest_edit)
+        dest_row.addWidget(btn_browse_rb)
+        lay.addLayout(dest_row)
+
+        btn_rb = QPushButton("🔎  Recover All Files Deleted from This Folder")
+        btn_rb.setMinimumHeight(45)
+        btn_rb.setStyleSheet(
+            "background-color: #a6e3a1; color: #11111b; font-weight: bold;"
+        )
+        btn_rb.clicked.connect(self.recover_permanent_folder)
+        lay.addWidget(btn_rb)
+
         return w
 
     def create_phase2_widget(self):
@@ -406,6 +604,281 @@ class RecoveryApp(QMainWindow):
             self.dest_lbl.setText(f)
 
     # ----- ACTIONS -----
+    def _browse_rb_dest(self):
+        """Open folder picker for the Recycle Bin restore destination."""
+        folder = QFileDialog.getExistingDirectory(self, "Select Destination Folder")
+        if folder:
+            self.rb_dest_edit.setText(folder)
+
+    def recover_permanent_folder(self):
+        """Start recovering all files (deleted from Recycle Bin) that originated
+        in the user-specified folder path.
+        """
+        folder_path = self.perm_path_edit.text().strip()
+        dest_dir = self.rb_dest_edit.text().strip()
+
+        if not folder_path:
+            QMessageBox.warning(
+                self,
+                "Input Required",
+                "Please enter the original folder path where the files were before deletion.",
+            )
+            return
+
+        if not dest_dir:
+            QMessageBox.warning(
+                self, "Destination Required", "Please choose a destination folder."
+            )
+            return
+
+        # Switch to Phase 2 view so user sees progress
+        self.stack.setCurrentIndex(1)
+        self.live_table.setRowCount(0)
+        self.prog_bar.setValue(0)
+        self.btn_next2.setEnabled(False)
+        self.status_lbl.setText(f"Scanning Recycle Bin for files from: {folder_path} …")
+
+        self._rb_restore_thread = RecycleBinRestoreThread(folder_path, dest_dir)
+        self._rb_restore_thread.progress_update.connect(self._on_rb_progress)
+        self._rb_restore_thread.restore_complete.connect(self._on_rb_complete)
+        self._rb_restore_thread.error_occurred.connect(self._on_rb_error)
+        self._rb_restore_thread.start()
+
+    def _on_rb_progress(self, cur: int, total: int, filename: str):
+        if total > 0:
+            pct = int((cur / total) * 100)
+            self.prog_bar.setValue(pct)
+        self.status_lbl.setText(f"Restoring {cur}/{total}: {filename}")
+
+    def _on_rb_complete(self, results: list):
+        """Called when all restoration work is done."""
+        self.prog_bar.setValue(100)
+
+        # ── No files found at all ──────────────────────────────────────────────
+        if not results:
+            self.status_lbl.setText("No deleted files found for that folder in the Recycle Bin.")
+            QMessageBox.information(
+                self,
+                "Recycle Bin Recovery",
+                "No deleted files were found in the Recycle Bin for the specified folder.\n\n"
+                "This means either:\n"
+                "  • The files were already permanently erased from the Recycle Bin, or\n"
+                "  • The folder path you entered doesn't match any deleted entries.\n\n"
+                "Tip: Check the exact original path (case-insensitive match is used).",
+            )
+            self.stack.setCurrentIndex(0)
+            return
+
+        recovered = [r for r in results if r["status"] == "recovered"]
+        errors    = [r for r in results if r["status"] == "error"]
+
+        # Populate the live discovery table
+        self.live_table.setRowCount(0)
+        for r in results:
+            row = self.live_table.rowCount()
+            self.live_table.insertRow(row)
+            self.live_table.setItem(row, 0, QTableWidgetItem(r["filename"]))
+            status_label = "✅ Recovered" if r["status"] == "recovered" else "❌ Error"
+            status_item = QTableWidgetItem(status_label)
+            if r["status"] == "recovered":
+                status_item.setForeground(QBrush(QColor("#a6e3a1")))
+            else:
+                status_item.setForeground(QBrush(QColor("#f38ba8")))
+            self.live_table.setItem(row, 1, status_item)
+            size_bytes = r.get("file_size", 0)
+            size_str = f"{size_bytes:,} bytes" if size_bytes else "—"
+            self.live_table.setItem(row, 2, QTableWidgetItem(size_str))
+            QApplication.processEvents()
+
+        total = len(results)
+        self.status_lbl.setText(
+            f"Recovery complete — {len(recovered)}/{total} file(s) recovered "
+            f"({len(errors)} error(s))."
+        )
+
+        # Build scan_results so Phase 3 / 4 export pipeline works
+        self.scan_results = []
+        for r in recovered:
+            self.scan_results.append({
+                "filename": r["filename"],
+                "filepath": r["dest_path"],
+                "original_path": r["original_path"],
+                "file_size": r.get("file_size", 0),
+                "sha256": r["sha256"],
+                "p_type": Path(r["filename"]).suffix.lstrip(".").upper() or "File",
+                "conf": 1.0,
+                "y_threat": False,
+                "action": "Ready",
+                "header_empty": False,
+                "source": "recycle_bin_folder",
+                "status": "recovered",
+            })
+
+        if self.scan_results:
+            self.btn_next2.setEnabled(True)
+            self.populate_phase3()
+
+        # Summary dialog
+        dest = self.rb_dest_edit.text()
+        msg = (
+            f"✅  Recovered {len(recovered)} of {total} file(s) from the Recycle Bin.\n"
+            f"📁  Saved to: {dest}"
+        )
+        if errors:
+            msg += f"\n\n⚠️  {len(errors)} file(s) could not be restored:\n"
+            msg += "\n".join(f"  • {e['filename']}: {e['error']}" for e in errors[:5])
+            if len(errors) > 5:
+                msg += f"\n  … and {len(errors) - 5} more."
+        QMessageBox.information(self, "Recycle Bin Recovery — Done", msg)
+
+    def _on_rb_error(self, err: str):
+        self.prog_bar.setValue(0)
+        self.status_lbl.setText("Recovery failed.")
+        QMessageBox.critical(self, "Recovery Error", err)
+        self.stack.setCurrentIndex(0)
+
+    def recover_permanent(self):
+        folder_path = self.perm_path_edit.text().strip()
+        dest_dir = self.rb_dest_edit.text().strip()
+        
+        dlg = PermanentRecoveryDialog(self, default_folder=folder_path, default_dest=dest_dir)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+            
+        vals = dlg.get_values()
+        if not vals["folder"]:
+            QMessageBox.warning(self, "Folder Required", "Please specify the original folder path.")
+            return
+        if not vals["dest"]:
+            QMessageBox.warning(self, "Destination Required", "Please specify the destination folder.")
+            return
+            
+        self.perm_path_edit.setText(vals["folder"])
+        self.rb_dest_edit.setText(vals["dest"])
+        
+        self.stack.setCurrentIndex(1)
+        self.live_table.setRowCount(0)
+        self.prog_bar.setValue(0)
+        self.btn_next2.setEnabled(False)
+        self.status_lbl.setText("Initializing forensic permanent recovery orchestrator...")
+        
+        self._perm_recovery_thread = PermanentRecoveryThread(
+            folder_path=vals["folder"],
+            dest_dir=vals["dest"],
+            filename=vals["filename"],
+            extension=vals["extension"],
+            time_start=vals["time_start"],
+            time_end=vals["time_end"]
+        )
+        self._perm_recovery_thread.progress_update.connect(self._on_perm_progress)
+        self._perm_recovery_thread.recovery_complete.connect(self._on_perm_complete)
+        self._perm_recovery_thread.error_occurred.connect(self._on_perm_error)
+        self._perm_recovery_thread.start()
+
+    def _on_perm_progress(self, phase: str, detail: str, pct: float):
+        self.prog_bar.setValue(int(pct * 100))
+        self.status_lbl.setText(f"[{phase.upper()}] {detail}")
+        
+    def _on_perm_error(self, err: str):
+        self.prog_bar.setValue(0)
+        self.status_lbl.setText("Permanent recovery failed.")
+        QMessageBox.critical(self, "Recovery Error", err)
+        self.stack.setCurrentIndex(0)
+        
+    def _on_perm_complete(self, results: list):
+        self.prog_bar.setValue(100)
+        
+        if not results:
+            self.status_lbl.setText("No permanently deleted files found.")
+            QMessageBox.information(
+                self,
+                "Permanent Recovery Complete",
+                "No permanently deleted files matching your criteria were found on the drive filesystem."
+            )
+            self.stack.setCurrentIndex(0)
+            return
+            
+        self.status_lbl.setText("Running LSTM + YARA analysis on recovered files...")
+        
+        processed_results = []
+        for cand in results:
+            filepath = cand.get("recovered_path")
+            if cand.get("status") != "recovered" or not filepath or not os.path.exists(filepath):
+                continue
+                
+            p_type = "Unknown"
+            conf = 0.8
+            if self.model:
+                try:
+                    with open(filepath, "rb") as f:
+                        file_data = f.read()
+                    header = file_data[:512]
+                    if len(header) < 512:
+                        header = header + b"\x00" * (512 - len(header))
+                    b = np.frombuffer(header, dtype=np.uint8).copy().astype('float32')
+                    
+                    pred = self.model.predict_single(b)
+                    p_idx = pred["predicted_class_idx"]
+                    p_type = self.label_decoder[p_idx] if self.label_decoder is not None and p_idx < len(self.label_decoder) else f"Type_{p_idx}"
+                    conf = pred["confidence"]
+                except Exception:
+                    p_type = Path(filepath).suffix.lstrip(".").upper() or "File"
+                    conf = 0.85
+            else:
+                p_type = Path(filepath).suffix.lstrip(".").upper() or "File"
+                conf = 0.85
+                
+            y_threat = False
+            threat_details = []
+            if self.yara_scanner:
+                try:
+                    with open(filepath, "rb") as f:
+                        data = f.read()
+                    yr = self.yara_scanner.scan_bytes(data, cand["filename"])
+                    y_threat = yr["threat_detected"]
+                    threat_details = yr["threats"]
+                except:
+                    pass
+                    
+            cand_item = {
+                "filename": cand["filename"],
+                "filepath": filepath,
+                "original_path": cand.get("original_path", ""),
+                "file_size": cand.get("file_size", 0),
+                "sha256": cand.get("sha256", ""),
+                "p_type": p_type,
+                "conf": conf,
+                "y_threat": y_threat,
+                "threat_details": threat_details,
+                "action": "Ready" if not y_threat else "Quarantined",
+                "header_empty": False,
+                "source": "permanent_recovery",
+                "status": "recovered",
+            }
+            processed_results.append(cand_item)
+            
+            row = self.live_table.rowCount()
+            self.live_table.insertRow(row)
+            self.live_table.setItem(row, 0, QTableWidgetItem(cand_item["filename"]))
+            self.live_table.setItem(row, 1, QTableWidgetItem(f"Probable_{p_type}_{int(conf*100)}%_Confidence"))
+            self.live_table.setItem(row, 2, QTableWidgetItem(str(cand_item["file_size"])))
+            QApplication.processEvents()
+            
+        self.scan_results = processed_results
+        self.btn_next2.setEnabled(True)
+        self.status_lbl.setText(f"Forensic Permanent Scan complete. Found {len(processed_results)} recoverable files.")
+        self.populate_phase3()
+        
+        dest = self.rb_dest_edit.text()
+        QMessageBox.information(
+            self,
+            "Permanent Recovery Done",
+            f"Forensic permanent recovery completed!\n\n"
+            f"Successfully recovered: {len(processed_results)} file(s).\n"
+            f"Saved in: {dest}\n\n"
+            f"You can now review header health and authorize threats in Phase 3."
+        )
+
     def start_phase2(self):
         d_val = self.drive_combo.currentText().strip()
         if not d_val: return
@@ -421,8 +894,14 @@ class RecoveryApp(QMainWindow):
         scope = self.scan_type.currentText()
         if "Recycle" in scope:
             mode = "recycle_bin"
+        elif "Permanent Delete Recovery" in scope:
+            mode = "permanent_recovery"
         else:
             mode = "unallocated"
+
+        if mode == "permanent_recovery":
+            self.recover_permanent()
+            return
             
         self.stack.setCurrentIndex(1)
         self.live_table.setRowCount(0)

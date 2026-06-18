@@ -66,6 +66,14 @@ class RecoverRequest(BaseModel):
     include_disk_scan: bool = False
 
 
+class ForensicRecoverRequest(BaseModel):
+    path: str
+    filename: Optional[str] = None
+    extension: Optional[str] = None
+    time_start: Optional[str] = None
+    time_end: Optional[str] = None
+
+
 # ════════════════════════════════════════════════════════
 # Startup — Load Models
 # ════════════════════════════════════════════════════════
@@ -205,6 +213,135 @@ async def start_recovery(req: RecoverRequest):
         req.include_disk_scan
     ))
     return {"status": "started", "path": req.path}
+
+
+@app.post("/recover/deleted")
+async def start_forensic_recovery(req: ForensicRecoverRequest):
+    if AppState.recovery_status["running"]:
+        return {"error": "Recovery already in progress"}
+
+    drive = os.path.splitdrive(os.path.abspath(req.path))[0]
+    if not drive or not os.path.exists(drive + "\\"):
+        return {"error": f"Invalid drive letter in path: {req.path}"}
+
+    # Run forensic recovery in background
+    asyncio.create_task(_run_deleted_recovery(
+        req.path,
+        req.filename,
+        req.extension,
+        req.time_start,
+        req.time_end
+    ))
+    return {"status": "started", "path": req.path}
+
+
+async def _run_deleted_recovery(path: str, filename: Optional[str], extension: Optional[str], time_start: Optional[str], time_end: Optional[str]):
+    AppState.recovery_status = {
+        "running": True, 
+        "progress": 0, 
+        "total": 100, 
+        "message": "Initializing forensic deleted recovery...", 
+        "results": []
+    }
+    try:
+        from recovery.deleted_file_recovery import DeletedFileRecovery
+        output_dir = os.path.join(PROJECT_ROOT, "recovered_files")
+        quarantine_dir = os.path.join(PROJECT_ROOT, "quarantine")
+        
+        reconstructor = FileReconstructor(
+            output_dir=output_dir,
+            quarantine_dir=quarantine_dir,
+        )
+        yara_scanner = AppState.yara_scanner
+        results = []
+
+        orchestrator = DeletedFileRecovery(output_dir=output_dir)
+
+        def progress_cb(phase, detail, pct):
+            AppState.recovery_status["progress"] = int(pct * 100)
+            AppState.recovery_status["message"] = f"[{phase.upper()}] {detail}"
+
+        loop = asyncio.get_running_loop()
+        raw_results = await loop.run_in_executor(
+            None,
+            lambda: orchestrator.recover(
+                original_folder_path=path,
+                filename=filename,
+                extension=extension,
+                deletion_time_start=time_start,
+                deletion_time_end=time_end,
+                progress_callback=progress_cb
+            )
+        )
+
+        total_cand = len(raw_results)
+        AppState.recovery_status["total"] = total_cand
+        AppState.recovery_status["message"] = f"Running AI analysis on {total_cand} candidates..."
+
+        for idx, candidate in enumerate(raw_results, 1):
+            AppState.recovery_status["progress"] = idx
+            AppState.recovery_status["message"] = f"Analyzing {candidate['filename']}..."
+
+            filepath = candidate.get("recovered_path", "")
+            has_error = (candidate.get("status") != "recovered" or not filepath or not os.path.exists(filepath))
+            
+            if has_error:
+                entry = {
+                    "filename": candidate["filename"],
+                    "filepath": candidate.get("original_path", ""),
+                    "file_size": candidate.get("file_size", 0),
+                    "sha256": candidate.get("sha256", ""),
+                    "predicted_type": "ERROR",
+                    "confidence": 0.0,
+                    "malware_score": 0.0,
+                    "risk_level": "LOW",
+                    "yara_threats": [],
+                    "action": "error",
+                    "repairs": candidate.get("warnings", []),
+                    "output_path": "",
+                    "source": "recycle_bin" if candidate.get("recovery_method") == "recycle_bin" else "disk_scan",
+                }
+                results.append(entry)
+            else:
+                try:
+                    with open(filepath, "rb") as f:
+                        file_data = f.read()
+                    header = file_data[:512]
+                    if len(header) < 512:
+                        header = header + b"\x00" * (512 - len(header))
+                    byte_array = np.frombuffer(header, dtype=np.uint8).copy()
+                except Exception:
+                    byte_array = np.zeros(512, dtype=np.uint8)
+
+                process_candidate = {
+                    "filename": candidate["filename"],
+                    "filepath": filepath,
+                    "file_size": len(file_data) if 'file_data' in locals() else candidate.get("file_size", 0),
+                    "sha256": candidate.get("sha256", ""),
+                    "byte_array": byte_array,
+                    "header_empty": bool(np.all(byte_array[:16] == 0)),
+                    "source": "recycle_bin" if candidate.get("recovery_method") == "recycle_bin" else "disk_scan",
+                }
+                _process_candidate(process_candidate, results, reconstructor, yara_scanner)
+            
+            AppState.recovery_status["results"] = results
+            await asyncio.sleep(0.001)
+
+        # Generate report
+        verifier = IntegrityVerifier(output_dir=os.path.join(PROJECT_ROOT, "outputs"))
+        methods_used = list(set(c.get("recovery_method", "unknown") for c in raw_results))
+        scan_summary = {"sources": ["forensic_recovery"] + methods_used}
+        recon_summary = reconstructor.get_summary()
+        report = verifier.generate_report(results, scan_summary, recon_summary)
+        verifier.save_report(report)
+
+        AppState.recovery_status["message"] = "Forensic Recovery complete! Check the Results tab."
+        AppState.recovery_status["running"] = False
+        AppState.recovery_status["report"] = report
+
+    except Exception as e:
+        AppState.recovery_status["message"] = f"Error during recovery: {str(e)}"
+        AppState.recovery_status["running"] = False
 
 
 async def _run_recovery(path: str, recursive: bool, include_rb: bool, include_disk: bool):
