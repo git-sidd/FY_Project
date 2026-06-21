@@ -7,18 +7,20 @@ Inference module for file type identification, anomaly analysis, and malware det
 
 import sys
 import os
-import json
+import pickle
 import argparse
 import numpy as np
 
-from models.xgboost_pipeline import XGBoostPipeline
+from models.xgboost_pipeline import FileSignatureXGBoost
 from models.cnn_model import FileSignatureCNN
+from utils.feature_engineering import FeatureEngineer
 
-# Load label mappings
+# Paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-MAPPING_FILE = os.path.join(SCRIPT_DIR, "saved_models", "file_types_mapping.json")
-XGB_MODEL_PATH = os.path.join(SCRIPT_DIR, "saved_models", "xgboost_pipeline.pkl")
-CNN_MODEL_PATH = os.path.join(SCRIPT_DIR, "saved_models", "cnn_model.keras")
+MODELS_DIR = os.path.join(SCRIPT_DIR, "saved_models")
+CNN_MODEL_PATH = os.path.join(MODELS_DIR, "cnn_model.keras")
+XGB_DIR = MODELS_DIR
+LABEL_ENCODER_PATH = os.path.join(MODELS_DIR, "label_encoder.pkl")
 
 def load_file_bytes(filepath: str, sample_size: int = 512) -> np.ndarray:
     try:
@@ -49,42 +51,56 @@ def main():
     # ── 1. Load Byte Array ─────────────────────────────────────
     X_bytes = load_file_bytes(filepath, 512)
     
-    # ── 2. Run XGBoost Anomaly Classifier ──────────────────────
-    print("  * Running Structural Anomaly Detection (XGBoost)...")
-    xgb_pipeline = XGBoostPipeline()
-    try:
-        xgb_pipeline.load(XGB_MODEL_PATH)
-        xgb_preds = xgb_pipeline.predict(X_bytes)
-        # 0=valid, 1=corrupt, 2=mismatch
-        anomaly_map = {0: "VALID", 1: "CORRUPTED", 2: "MISMATCH/DISGUISED"}
-        
-        pred_label_idx = xgb_preds[0]
-        print(f"    Anomaly Status : {anomaly_map.get(pred_label_idx, 'UNKNOWN')}")
-    except Exception as e:
-        print(f"    [XGBoost Skipped] {e}")
-
-    # ── 3. Run CNN File Type & Malware Detection ───────────────
-    print("  * Running CNN File Type & Malware Detection...")
+    # ── 2. Initialize Components ──────────────────────────────
+    print("  * Initializing Models...")
     cnn = FileSignatureCNN()
+    xgb_model = FileSignatureXGBoost()
+    fe = FeatureEngineer()
+    
     try:
-        # Load label mapping
-        with open(MAPPING_FILE, 'r') as f:
-            mapping = json.load(f)
-            
         cnn.load(CNN_MODEL_PATH)
-        preds = cnn.model.predict(X_bytes, verbose=0)
+        xgb_model.load(XGB_DIR)
         
-        type_probs = preds[0][0]
-        malware_prob = preds[1][0][0]
+        # Load Label Decoder
+        label_decoder = None
+        if os.path.exists(LABEL_ENCODER_PATH):
+            with open(LABEL_ENCODER_PATH, "rb") as f:
+                le = pickle.load(f)
+                label_decoder = le.classes_
         
-        pred_class_idx = np.argmax(type_probs)
-        pred_type = mapping.get(str(pred_class_idx), "UNKNOWN")
-        confidence = type_probs[pred_class_idx] * 100
+        # ── 3. Feature Extraction ───────────────────────────────
+        print("  * Extracting Features...")
+        # CNN Features
+        X_cnn_input = X_bytes.astype(np.float32)
+        cnn_features = cnn.extract_features(X_cnn_input)
         
-        print(f"    File Type      : {pred_type} (Confidence: {confidence:.2f}%)")
-        print(f"    Malware Risk   : {'HIGH' if malware_prob >= 0.5 else 'LOW'} (Score: {malware_prob:.4f})")
+        # Handcrafted Features
+        fe_features = fe.extract_all(X_bytes[0])
+        X_handcrafted = np.array([fe_features], dtype=np.float32)
+        
+        # ── 4. Hybrid Prediction ───────────────────────────────
+        print("  * Running Hybrid Analysis...")
+        results = xgb_model.predict(cnn_features, X_handcrafted, label_decoder)
+        
+        # Display Results
+        print("\n" + "="*40)
+        print(f" ANALYSIS RESULTS: {os.path.basename(filepath)}")
+        print("="*40)
+        print(f"    Predicted File Type : {results['file_type']}")
+        print(f"    Confidence Score    : {results['file_type_confidence']*100:.2f}%")
+        print(f"    Malware Risk Score  : {results['malware_risk_score']:.4f}")
+        print(f"    Risk Level          : {results['risk_level']}")
+        
+        if results['signature_tampered']:
+            print("    [!] WARNING: Signature Tampering Detected (Corrupted/Mismatch)!")
+        else:
+            print("    [+] Signature appears valid/consistent.")
+        print("="*40)
+
     except Exception as e:
-        print(f"    [CNN Skipped] {e}")
+        print(f"    Error during analysis: {e}")
+        import traceback
+        traceback.print_exc()
 
     print("\nAnalysis Complete!\n")
 

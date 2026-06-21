@@ -62,3 +62,8 @@ coverage/
 ## Misc
 .DS_Store
 *.pem
+
+#output files
+recovered_files/*
+quatantine/*
+outputs/*
